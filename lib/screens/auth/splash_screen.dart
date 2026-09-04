@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/pawstay_theme.dart';
-import 'login.dart';
+
+import 'package:flutter_application_1/core/theme/pawstay_theme.dart';
+import 'package:flutter_application_1/screens/auth/login.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});

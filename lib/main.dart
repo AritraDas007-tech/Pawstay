@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'theme/pawstay_theme.dart';
-import 'Screen/splash_screen.dart';
+
+import 'package:flutter_application_1/core/theme/pawstay_theme.dart';
+import 'package:flutter_application_1/screens/auth/splash_screen.dart';
 
 void main() {
   runApp(const MyApp());

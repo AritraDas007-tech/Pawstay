@@ -1,13 +1,17 @@
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
-import '../theme/pawstay_theme.dart';
-import 'signup.dart';
-import 'home.dart';
-import 'verify_otp.dart';
-import 'forgot_password.dart';
+
+import 'package:flutter_application_1/core/theme/pawstay_theme.dart';
+import 'package:flutter_application_1/core/config/api_config.dart';
+import 'package:flutter_application_1/screens/auth/signup.dart';
+import 'package:flutter_application_1/screens/auth/verify_otp.dart';
+import 'package:flutter_application_1/screens/auth/forgot_password.dart';
+import 'package:flutter_application_1/screens/user/home_screen.dart';
+import 'package:flutter_application_1/screens/provider/dashboard/provider_dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -23,8 +27,6 @@ class _LoginScreenState extends State<LoginScreen>
   final _passwordController = TextEditingController();
 
   bool _isLoading = false;
-
-  // Animation controller for scale-bounce of primary button
   late AnimationController _buttonScaleController;
 
   @override
@@ -32,7 +34,7 @@ class _LoginScreenState extends State<LoginScreen>
     super.initState();
     _buttonScaleController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 100),
       lowerBound: 0.95,
       upperBound: 1.0,
       value: 1.0,
@@ -62,73 +64,116 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _onLoginPressed() async {
+    debugPrint('[AUTH] Login Button Clicked');
     _buttonScaleController.reverse().then(
       (_) => _buttonScaleController.forward(),
     );
 
-    if (!_formKey.currentState!.validate()) return;
+    if (!_formKey.currentState!.validate()) {
+      debugPrint('[AUTH] Login validation failed');
+      return;
+    }
 
     setState(() => _isLoading = true);
 
     try {
+      final identifier = _emailController.text.trim();
       final body = jsonEncode({
-        'email_or_username': _emailController.text.trim(),
+        'email_or_username': identifier,
         'password': _passwordController.text,
       });
 
-      http.Response response;
-      try {
-        response = await http
-            .post(
-              Uri.parse('http://127.0.0.1:8000/login'),
-              headers: {'Content-Type': 'application/json'},
-              body: body,
-            )
-            .timeout(const Duration(seconds: 4));
-      } catch (_) {
-        response = await http
-            .post(
-              Uri.parse('http://10.0.2.2:8000/login'),
-              headers: {'Content-Type': 'application/json'},
-              body: body,
-            )
-            .timeout(const Duration(seconds: 8));
-      }
+      debugPrint('[AUTH] Calling Login API: ${ApiConfig.baseUrl}/login');
+
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: body,
+          )
+          .timeout(const Duration(seconds: 12));
+
+      debugPrint(
+        '[AUTH] Login Response: ${response.statusCode} - ${response.body}',
+      );
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        final decoded = jsonDecode(response.body);
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        String role = (decoded['role'] as String? ?? '').trim();
+
+        // Fallback to fetch profile if role not in login payload
+        if (role.isEmpty) {
+          try {
+            final profRes = await http
+                .get(
+                  Uri.parse(
+                    '${ApiConfig.baseUrl}/profile?lookup=${Uri.encodeComponent(identifier)}',
+                  ),
+                )
+                .timeout(const Duration(seconds: 4));
+            if (profRes.statusCode == 200) {
+              final profData = jsonDecode(profRes.body) as Map<String, dynamic>;
+              role = (profData['role'] as String? ?? '').trim();
+            }
+          } catch (_) {}
+        }
+
+        if (!mounted) return;
+        debugPrint('[AUTH] Login Success: user role is "$role"');
         _showSnack(decoded['message'] ?? 'Login successful!');
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => HomeScreen(
-              userLookup: _emailController.text.trim(),
+
+        final isProvider =
+            role.toLowerCase().contains('service') ||
+            role.toLowerCase().contains('provider') ||
+            role.toLowerCase().contains('doctor') ||
+            role.toLowerCase().contains('seller');
+
+        if (isProvider) {
+          debugPrint('[AUTH] Redirecting to Provider Dashboard');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ProviderDashboardScreen(providerLookup: identifier),
             ),
-          ),
-        );
+          );
+        } else {
+          debugPrint('[AUTH] Redirecting to Customer Home');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => HomeScreen(userLookup: identifier),
+            ),
+          );
+        }
       } else {
         final decoded = jsonDecode(response.body);
         final detail =
-            decoded['detail'] ?? 'Login failed. Please check credentials.';
+            decoded['detail']?.toString() ??
+            'Login failed. Please check credentials.';
+        debugPrint('[AUTH] Login Failed: $detail');
         _showSnack(detail, isError: true);
 
         if (response.statusCode == 403 ||
-            detail.toString().toLowerCase().contains('unverified')) {
+            detail.toLowerCase().contains('unverified')) {
+          debugPrint(
+            '[AUTH] Account unverified, redirecting to OTP verification',
+          );
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) =>
-                  VerifyOtpScreen(email: _emailController.text.trim()),
+              builder: (context) => VerifyOtpScreen(email: identifier),
             ),
           );
         }
       }
     } on TimeoutException {
+      debugPrint('[AUTH] Login Timeout');
       _showSnack('Connection timed out. Is backend running?', isError: true);
-    } catch (_) {
-      _showSnack('Could not connect to server.', isError: true);
+    } catch (e, st) {
+      debugPrint('[AUTH] Login Exception: $e\n$st');
+      _showSnack('Could not connect to server: $e', isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -142,7 +187,7 @@ class _LoginScreenState extends State<LoginScreen>
       backgroundColor: PawStayTheme.background,
       body: Stack(
         children: [
-          // Background Gradient Circles for Visual Aesthetics (Tailwind floating blur equivalent)
+          // Background Gradient Circles for Visual Aesthetics
           Positioned(
             top: -size.height * 0.1,
             left: -size.width * 0.1,
@@ -151,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen>
               height: size.width * 0.5,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: PawStayTheme.primaryContainer.withValues(alpha: 0.08),
+                color: PawStayTheme.primaryContainer.withValues(alpha: 0.15),
               ),
             ),
           ),
@@ -197,26 +242,19 @@ class _LoginScreenState extends State<LoginScreen>
                     children: [
                       // Brand Logo Area
                       Container(
-                        width: 96,
-                        height: 96,
+                        width: 80,
+                        height: 80,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: PawStayTheme.surfaceContainer,
+                          color: PawStayTheme.primaryContainer,
                           boxShadow: PawStayTheme.ambientShadow1,
                         ),
-                        clipBehavior: Clip.antiAlias,
-                        child: Image.network(
-                          'https://lh3.googleusercontent.com/aida-public/AB6AXuA8RJj9f4EnjA7BkNpLbCt4PE2gsE1KeDTKGfAdta4sgEMGLs19XUGa9udNcJapsAbk55Py4XhgHk_BkisgvgZ_BuwnAIx1YQzQpNgKT_0kMXn7N5WUgFH5oZ1ykBsZ4EWgixeYfFtOcrrCRIRdcKTvS8TaQ3mELnS9yL-AbzTpjPWp5Ger5lAlu9P14zzj1i4hTt-Z3xr9JOLdvkUjajISxSNgqFuDwRcQSuTyxHibaFnsZteK_EM7',
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) {
-                            return const Center(
-                              child: Icon(
-                                Icons.pets,
-                                color: PawStayTheme.primary,
-                                size: 48,
-                              ),
-                            );
-                          },
+                        child: const Center(
+                          child: Icon(
+                            Icons.pets,
+                            color: PawStayTheme.primary,
+                            size: 40,
+                          ),
                         ),
                       ),
 
@@ -225,7 +263,7 @@ class _LoginScreenState extends State<LoginScreen>
                       Text(
                         'PawStay',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 32,
+                          fontSize: 30,
                           fontWeight: FontWeight.bold,
                           color: PawStayTheme.primary,
                         ),
@@ -236,20 +274,20 @@ class _LoginScreenState extends State<LoginScreen>
                       Text(
                         'Welcome back! Please login to continue.',
                         style: GoogleFonts.plusJakartaSans(
-                          fontSize: 16,
+                          fontSize: 14,
                           color: PawStayTheme.onSurfaceVariant,
                         ),
                         textAlign: TextAlign.center,
                       ),
 
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 28),
 
                       // Email input field
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Email',
+                            'Email or Username',
                             style: GoogleFonts.plusJakartaSans(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -265,20 +303,15 @@ class _LoginScreenState extends State<LoginScreen>
                               color: PawStayTheme.onSurface,
                             ),
                             decoration: const InputDecoration(
-                              hintText: 'Enter your email',
+                              hintText: 'Enter your email or username',
                               prefixIcon: Icon(
-                                Icons.mail_outline_rounded,
+                                Icons.person_outline_rounded,
                                 color: PawStayTheme.outlineVariant,
                               ),
                             ),
                             validator: (val) {
                               if (val == null || val.trim().isEmpty) {
-                                return 'Please enter your email';
-                              }
-                              if (!RegExp(
-                                r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
-                              ).hasMatch(val)) {
-                                return 'Please enter a valid email address';
+                                return 'Please enter your email or username';
                               }
                               return null;
                             },
@@ -286,7 +319,7 @@ class _LoginScreenState extends State<LoginScreen>
                         ],
                       ),
 
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 20),
 
                       // Password input field
                       Column(
@@ -311,15 +344,11 @@ class _LoginScreenState extends State<LoginScreen>
                                       MaterialTapTargetSize.shrinkWrap,
                                 ),
                                 onPressed: () {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        'Forgot password functionality is coming soon!',
-                                        style: GoogleFonts.plusJakartaSans(
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                      backgroundColor: PawStayTheme.primary,
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const ForgotPasswordScreen(),
                                     ),
                                   );
                                 },
@@ -359,7 +388,7 @@ class _LoginScreenState extends State<LoginScreen>
                         ],
                       ),
 
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 28),
 
                       // Login button with press bounce
                       ScaleTransition(
@@ -407,8 +436,9 @@ class _LoginScreenState extends State<LoginScreen>
                       const SizedBox(height: 24),
 
                       // Navigation check
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           Text(
                             "Don't have an account? ",
@@ -421,19 +451,13 @@ class _LoginScreenState extends State<LoginScreen>
                             onTap: () {
                               Navigator.push(
                                 context,
-                                PageRouteBuilder(
-                                  pageBuilder: (context, a, sa) =>
-                                      const SignupScreen(),
-                                  transitionsBuilder: (context, a, sa, child) =>
-                                      FadeTransition(opacity: a, child: child),
-                                  transitionDuration: const Duration(
-                                    milliseconds: 300,
-                                  ),
+                                MaterialPageRoute(
+                                  builder: (context) => const SignupScreen(),
                                 ),
                               );
                             },
                             child: Text(
-                              'Sign up',
+                              'Sign Up',
                               style: GoogleFonts.plusJakartaSans(
                                 fontSize: 14,
                                 fontWeight: FontWeight.bold,
